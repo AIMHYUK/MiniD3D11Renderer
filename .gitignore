@@ -1,0 +1,25 @@
+# ── 빌드 산출물 ──
+build/
+Debug/
+Release/
+x64/
+*.exe
+*.pdb
+*.ilk
+*.obj
+*.idb
+*.log
+*.tlog
+*.lastbuildstate
+
+# ── Visual Studio 사용자 설정 ──
+.vs/
+*.user
+*.suo
+*.VC.db
+*.VC.opendb
+
+# ── Obsidian 작업 공간 (문서 본문은 커밋한다) ──
+Docs/.obsidian/workspace.json
+Docs/.obsidian/workspace-mobile.json
+Docs/.trash/
