@@ -63,6 +63,10 @@
       <GenerateDebugInformation>true</GenerateDebugInformation>
       <AdditionalDependencies>d3d11.lib;dxgi.lib;d3dcompiler.lib;dxguid.lib;%(AdditionalDependencies)</AdditionalDependencies>
     </Link>
+    <PostBuildEvent>
+      <Command>xcopy /Y /D /I "$(ProjectDir)shaders\*.hlsl" "$(OutDir)shaders\"</Command>
+      <Message>셰이더를 출력 폴더로 복사</Message>
+    </PostBuildEvent>
   </ItemDefinitionGroup>
 
   <ItemDefinitionGroup Condition="'$(Configuration)|$(Platform)'=='Debug|x64'">
@@ -97,6 +101,13 @@
     <ClInclude Include="src\FrameTimer.h" />
     <ClInclude Include="src\Renderer.h" />
     <ClInclude Include="src\Window.h" />
+  </ItemGroup>
+
+  <!-- 셰이더는 빌드 때 컴파일하지 않는다(None). 실행 중에 D3DCompileFromFile이 읽는다.
+       대신 빌드가 끝나면 exe 옆으로 복사해 둔다. -->
+  <ItemGroup>
+    <None Include="shaders\Triangle.vs.hlsl" />
+    <None Include="shaders\Triangle.ps.hlsl" />
   </ItemGroup>
 
   <Import Project="$(VCTargetsPath)\Microsoft.Cpp.targets" />

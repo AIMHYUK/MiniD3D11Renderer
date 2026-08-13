@@ -8,7 +8,7 @@
 int WINAPI wWinMain(HINSTANCE hInstance, HINSTANCE, LPWSTR, int nCmdShow)
 {
     constexpr UINT kInitialWidth  = 1280;
-    constexpr UINT kInitialHeight = 720;
+    constexpr UINT kInitialHeight = 720; //창 크기
 
     Window window;
     if (!window.Create(hInstance, L"MiniD3D11Renderer", kInitialWidth, kInitialHeight))

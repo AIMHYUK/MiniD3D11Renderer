@@ -23,3 +23,21 @@ bool CheckHR(HRESULT hr, const wchar_t* what, const wchar_t* file, int line)
     MessageBoxW(nullptr, message, L"MiniD3D11Renderer", MB_OK | MB_ICONERROR);
     return false;
 }
+
+std::wstring ResolvePathFromExe(const wchar_t* relativePath)
+{
+    // 첫 인자에 nullptr을 주면 "지금 실행 중인 exe"의 전체 경로를 준다.
+    wchar_t exePath[MAX_PATH]{};
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+
+    std::wstring path(exePath);
+
+    // 마지막 역슬래시까지만 남겨 폴더 경로로 만든다.
+    // "C:\...\Debug\App.exe" -> "C:\...\Debug\"
+    const size_t slash = path.find_last_of(L"\\/");
+    if (slash != std::wstring::npos)
+        path.resize(slash + 1);
+
+    path += relativePath;
+    return path;
+}

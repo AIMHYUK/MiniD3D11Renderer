@@ -5,10 +5,17 @@
 #include <d3d11.h>
 #include <dxgi1_2.h>
 
-// D3D11 디바이스·스왑체인·백버퍼 뷰를 소유하고, 한 프레임을 그린다.
+// 정점 하나가 담는 것. C++ 쪽 정의다.
 //
-// 지금 단계에서 "그린다"는 화면을 한 가지 색으로 지우는 것뿐이다.
-// 정점 버퍼와 셰이더는 다음 단계에서 붙인다.
+// 이 구조체와 HLSL의 VSInput, 그리고 입력 레이아웃 셋이 서로 맞아야 한다.
+// 하나라도 어긋나면 삼각형이 엉뚱한 데 뜨거나 아예 안 뜬다.
+struct Vertex
+{
+    float x, y;          // NDC 좌표. 화면 중앙이 (0,0), 범위는 -1 ~ +1
+    float r, g, b, a;    // 색. 각 0 ~ 1
+};
+
+// D3D11 디바이스·스왑체인·백버퍼 뷰를 소유하고, 한 프레임을 그린다.
 class Renderer
 {
 public:
@@ -24,10 +31,21 @@ private:
     bool CreateBackBufferView();
     void ReleaseBackBufferView();
 
+    // 삼각형을 그리는 데 필요한 것들을 한 번에 만든다.
+    // 셰이더 컴파일 -> 셰이더 객체 -> 입력 레이아웃 -> 정점 버퍼 순.
+    bool CreateTriangleResources();
+
     ComPtr<ID3D11Device>           m_device;
     ComPtr<ID3D11DeviceContext>    m_context;
     ComPtr<IDXGISwapChain1>        m_swapChain;
     ComPtr<ID3D11RenderTargetView> m_backBufferView;
+
+    // ── 삼각형용 ──
+    ComPtr<ID3D11VertexShader> m_vertexShader;
+    ComPtr<ID3D11PixelShader>  m_pixelShader;
+    ComPtr<ID3D11InputLayout>  m_inputLayout;   // 정점 버퍼의 바이트를 해석하는 규칙
+    ComPtr<ID3D11Buffer>       m_vertexBuffer;  // GPU 메모리에 올라간 정점 데이터
+    ComPtr<ID3D11RasterizerState>   m_rasterizerState; //이거로 반시계만 보는지 , 뒤에도 보는지 규칙해방가능.
 
     UINT m_width  = 0;
     UINT m_height = 0;

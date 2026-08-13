@@ -1,5 +1,7 @@
 #include "Renderer.h"
 
+#include <cmath>
+#include <d3dcompiler.h>
 #include <dxgi1_2.h>
 
 namespace
@@ -8,7 +10,60 @@ namespace
     constexpr DXGI_FORMAT kBackBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 
     // 화면을 지울 색. 아무것도 안 그려도 이 색이 보이면 파이프라인이 살아 있다는 뜻이다.
-    constexpr float kClearColor[4] = { 0.09f, 0.11f, 0.16f, 1.0f };
+    constexpr float kClearColor[4] = { 1.00f, 0.11f, 0.16f, 1.0f };
+
+    // HLSL 파일 하나를 컴파일해서 결과 바이트코드를 blob에 담아 준다.
+    //
+    // 셰이더는 C++처럼 미리 exe에 박히는 게 아니라, 텍스트 상태로 두었다가
+    // 실행할 때 GPU가 알아듣는 바이트코드로 번역한다. 그 번역기가 D3DCompileFromFile이다.
+    // (미리 fxc.exe로 번역해 .cso 파일로 만들어 두는 방법도 있다. 나중에 바꿀 수 있다)
+    bool CompileShaderFromFile(const wchar_t* fileName,
+                               const char* entryPoint,
+                               const char* target,        // "vs_5_0" / "ps_5_0"
+                               ComPtr<ID3DBlob>& outBlob)
+    {
+        UINT flags = D3DCOMPILE_ENABLE_STRICTNESS;
+#ifdef _DEBUG
+        // 디버그 빌드에서는 최적화를 끄고 디버그 정보를 넣는다.
+        // 그래야 그래픽 디버거에서 셰이더를 한 줄씩 따라갈 수 있다.
+        flags |= D3DCOMPILE_DEBUG | D3DCOMPILE_SKIP_OPTIMIZATION;
+#endif
+
+        const std::wstring fullPath = ResolvePathFromExe(fileName);
+
+        ComPtr<ID3DBlob> errorBlob;
+        const HRESULT hr = D3DCompileFromFile(
+            fullPath.c_str(),
+            nullptr,                            // 매크로 정의 없음
+            D3D_COMPILE_STANDARD_FILE_INCLUDE,  // #include를 파일 기준으로 처리
+            entryPoint,
+            target,
+            flags, 0,
+            outBlob.GetAddressOf(),
+            errorBlob.GetAddressOf());
+
+        if (FAILED(hr))
+        {
+            // 셰이더 오류는 HRESULT만 봐서는 아무것도 알 수 없다.
+            // 진짜 정보("몇 번째 줄에서 무슨 문법 오류")는 errorBlob 안에 문장으로 들어 있다.
+            // 이걸 안 보여주면 셰이더 디버깅이 불가능해진다.
+            if (errorBlob)
+            {
+                const char* text = static_cast<const char*>(errorBlob->GetBufferPointer());
+                MessageBoxA(nullptr, text, "셰이더 컴파일 오류", MB_OK | MB_ICONERROR);
+            }
+            else
+            {
+                // errorBlob이 없으면 대개 파일을 못 찾은 것이다.
+                std::wstring message = L"셰이더 파일을 열 수 없습니다.\n\n";
+                message += fullPath;
+                MessageBoxW(nullptr, message.c_str(), L"MiniD3D11Renderer", MB_OK | MB_ICONERROR);
+            }
+            return false;
+        }
+
+        return true;
+    }
 }
 
 bool Renderer::Initialize(HWND hwnd, UINT width, UINT height)
@@ -19,7 +74,104 @@ bool Renderer::Initialize(HWND hwnd, UINT width, UINT height)
     if (!CreateDeviceAndSwapChain(hwnd, width, height))
         return false;
 
-    return CreateBackBufferView();
+    if (!CreateBackBufferView())
+        return false;
+
+    return CreateTriangleResources();
+}
+
+bool Renderer::CreateTriangleResources()
+{
+    // ── 1. 셰이더 소스를 GPU 바이트코드로 컴파일한다 ──
+    ComPtr<ID3DBlob> vsBlob;
+    ComPtr<ID3DBlob> psBlob;
+
+    if (!CompileShaderFromFile(L"shaders\\Triangle.vs.hlsl", "main", "vs_5_0", vsBlob))
+        return false;
+    if (!CompileShaderFromFile(L"shaders\\Triangle.ps.hlsl", "main", "ps_5_0", psBlob))
+        return false;
+
+    // ── 2. 바이트코드로 실제 셰이더 객체를 만든다 ──
+    // blob은 그냥 바이트 덩어리고, 이걸 GPU가 쓸 수 있는 객체로 바꾸는 단계다.
+    if (!HR_CHECK(m_device->CreateVertexShader(
+            vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(), nullptr,
+            m_vertexShader.GetAddressOf()),
+            L"CreateVertexShader"))
+        return false;
+
+    if (!HR_CHECK(m_device->CreatePixelShader(
+            psBlob->GetBufferPointer(), psBlob->GetBufferSize(), nullptr,
+            m_pixelShader.GetAddressOf()),
+            L"CreatePixelShader"))
+        return false;
+
+    // ── 3. 입력 레이아웃 ──
+    //
+    // GPU 입장에서 정점 버퍼는 그냥 바이트 뭉치다. 어디서부터 어디까지가 위치이고
+    // 색인지 알 방법이 없다. 그 해석 규칙을 알려주는 것이 입력 레이아웃이다.
+    //
+    // Vertex 구조체가 메모리에 이렇게 깔린다:
+    //
+    //   바이트  0   4   8      12  16  20   24
+    //          [x] [y] [r] [g] [b] [a]
+    //          └ POSITION ┘ └──── COLOR ────┘
+    //           (8바이트)        (16바이트)
+    //
+    const D3D11_INPUT_ELEMENT_DESC layout[] = {
+        // 시맨틱 이름, 인덱스, 포맷, 입력 슬롯, 시작 바이트 오프셋, 분류, 인스턴스 스텝
+        { "POSITION", 0, DXGI_FORMAT_R32G32_FLOAT,       0,  0, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+        { "COLOR",    0, DXGI_FORMAT_R32G32B32A32_FLOAT, 0,  8, D3D11_INPUT_PER_VERTEX_DATA, 0 },
+    };
+
+    // 만들 때 정점 셰이더 바이트코드를 같이 넘긴다.
+    // 런타임이 "이 레이아웃이 저 셰이더의 입력과 실제로 맞는가"를 여기서 검증한다.
+    // 시맨틱 이름을 오타 내면 바로 여기서 실패한다.
+    if (!HR_CHECK(m_device->CreateInputLayout(
+            layout, _countof(layout),
+            vsBlob->GetBufferPointer(), vsBlob->GetBufferSize(),
+            m_inputLayout.GetAddressOf()),
+            L"CreateInputLayout"))
+        return false;
+
+    // ── 4. 정점 버퍼 ──
+    //
+    // 좌표는 NDC다. 화면 중앙이 (0,0), 위가 +y, 범위는 -1 ~ +1.
+    // 창 크기가 바뀌어도 이 값은 그대로라서 삼각형이 같이 늘어난다.
+    //
+    // 순서가 시계 방향인 것에 이유가 있다. D3D는 기본적으로 시계 방향을 앞면으로 보고,
+    // 뒷면은 그리지 않고 버린다(백페이스 컬링). 반시계로 적으면 삼각형이 사라진다.
+    const Vertex vertices[] = {
+        //   x      y        r     g     b     a
+        {  0.0f,  0.5f,    1.0f, 0.2f, 0.2f, 1.0f },   // 위      - 빨강
+        {  0.5f, -0.5f,    0.2f, 1.0f, 0.2f, 1.0f },   // 오른아래 - 초록
+        { -0.5f, -0.5f,    0.2f, 0.4f, 1.0f, 1.0f },   // 왼아래   - 파랑
+    };
+
+    D3D11_BUFFER_DESC desc{};
+    desc.ByteWidth = sizeof(vertices);
+    // IMMUTABLE = 만든 뒤 절대 안 바뀐다. GPU가 가장 빠른 메모리에 둘 수 있다.
+    // 매 프레임 내용을 바꿔야 하면 DYNAMIC + CPU_ACCESS_WRITE를 쓴다. (6일차에 그렇게 한다)
+    desc.Usage     = D3D11_USAGE_IMMUTABLE;
+    desc.BindFlags = D3D11_BIND_VERTEX_BUFFER;
+
+    D3D11_SUBRESOURCE_DATA initialData{};
+    initialData.pSysMem = vertices;
+
+    if (!HR_CHECK(m_device->CreateBuffer(&desc, &initialData, m_vertexBuffer.GetAddressOf()),
+                  L"CreateBuffer(VertexBuffer)"))
+        return false;
+
+    D3D11_RASTERIZER_DESC rd{};
+    rd.FillMode = D3D11_FILL_SOLID;
+    rd.CullMode = D3D11_CULL_BACK;
+    rd.FrontCounterClockwise = FALSE;
+
+    if (!HR_CHECK(m_device->CreateRasterizerState(&rd, m_rasterizerState.GetAddressOf()),
+        L"CreateRasterizerState"))
+        return false;
+
+
+    return true;
 }
 
 bool Renderer::CreateDeviceAndSwapChain(HWND hwnd, UINT width, UINT height)
@@ -174,10 +326,33 @@ void Renderer::Render()
     // 그래서 매 프레임 다시 바인딩한다.
     ID3D11RenderTargetView* views[] = { m_backBufferView.Get() };
     m_context->OMSetRenderTargets(1, views, nullptr);
+    static float t = 0.0f;
+    t += 0.01f;
+    const float color[4] = { sinf(t) * 0.5f + 0.5f, 0.2f, 0.4f, 1.0f };
+    m_context->ClearRenderTargetView(m_backBufferView.Get(), color);
 
-    m_context->ClearRenderTargetView(m_backBufferView.Get(), kClearColor);
+    // ── 삼각형 그리기 ──
+    //
+    // Draw()에는 "무엇을 어디에 어떻게"가 하나도 안 들어간다. 개수만 넘긴다.
+    // 그래서 그 전에 파이프라인 각 자리에 필요한 것을 꽂아둬야 한다.
+    // 아래 다섯 줄이 그 꽂아두는 작업이고, 마지막 한 줄이 "그려"다.
 
-    // 여기에 앞으로 드로우 콜이 들어간다.
+    UINT stride = sizeof(Vertex);   // 정점 하나가 몇 바이트인지
+    UINT offset = 0;                // 버퍼 앞에서 몇 바이트 건너뛰고 시작할지
+
+    // IA — 바이트를 어떻게 해석할지, 어느 버퍼에서 읽을지, 셋씩 묶어 삼각형으로 볼지
+    m_context->IASetInputLayout(m_inputLayout.Get());
+    m_context->IASetVertexBuffers(0, 1, m_vertexBuffer.GetAddressOf(), &stride, &offset);
+    //D3D11_PRIMITIVE_TOPOLOGY_LINESTRIP로 수정하니 선만 생김.
+    m_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
+    m_context->RSSetState(m_rasterizerState.Get());
+    // VS / PS — 어떤 셰이더를 쓸지
+    m_context->VSSetShader(m_vertexShader.Get(), nullptr, 0);
+    m_context->PSSetShader(m_pixelShader.Get(), nullptr, 0);
+
+    // 그려. 정점 3개를 0번부터.
+    //2,0으로 수정하니 삼각형이 사라짐.
+    m_context->Draw(3, 0);
 
     // 첫 번째 인자가 SyncInterval이다. 1이면 수직동기(VSync)를 기다린다.
     // 지금은 화면 찢김 없이 보는 것이 목적이라 1로 둔다.
