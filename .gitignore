@@ -20,6 +20,10 @@ x64/
 *.VC.opendb
 
 # ── Obsidian 작업 공간 (문서 본문은 커밋한다) ──
+# 볼트를 저장소 루트에서 열고 있어 .obsidian이 루트에 생긴다.
+.obsidian/workspace.json
+.obsidian/workspace-mobile.json
+.trash/
 Docs/.obsidian/workspace.json
 Docs/.obsidian/workspace-mobile.json
 Docs/.trash/
