@@ -10,7 +10,7 @@ namespace
     constexpr DXGI_FORMAT kBackBufferFormat = DXGI_FORMAT_R8G8B8A8_UNORM;
 
     // 화면을 지울 색. 아무것도 안 그려도 이 색이 보이면 파이프라인이 살아 있다는 뜻이다.
-    constexpr float kClearColor[4] = { 1.00f, 0.11f, 0.16f, 1.0f };
+    constexpr float kClearColor[4] = { 0.10f, 0.10f, 0.12f, 1.0f };
 
     // HLSL 파일 하나를 컴파일해서 결과 바이트코드를 blob에 담아 준다.
     //
@@ -135,8 +135,11 @@ bool Renderer::CreateSpriteResources()
 
     // ── 4. 정점 버퍼 ──
     //
-    // 좌표는 NDC다. 화면 중앙이 (0,0), 위가 +y, 범위는 -1 ~ +1.
-    // 창 크기가 바뀌어도 이 값은 그대로라서 사각형이 같이 늘어난다.
+    // 좌표가 아니라 "단위 사각형"이다. 좌상단 (0,0), 우하단 (1,1).
+    // 화면 좌표계와 방향을 맞춰뒀다(y가 아래로 +). 실제 위치·크기는 상수 버퍼가 정한다.
+    //
+    // 이렇게 두면 스프라이트가 몇 개든 정점 버퍼는 이것 하나로 끝나고, 아무도
+    // 건드리지 않으니 IMMUTABLE로 남는다. 7단계 인스턴싱이 이 구조를 전제한다.
     //
     // 사각형은 삼각형 2개지만 정점은 4개면 된다. 0과 2가 두 삼각형에 함께 쓰인다.
     //
@@ -145,11 +148,11 @@ bool Renderer::CreateSpriteResources()
     //   │   ╲    │        아래쪽 삼각형: 0, 2, 3
     //   3 ────── 2
     const Vertex vertices[] = {
-        //   x      y        r     g     b     a
-        { -0.5f,  0.5f,    1.0f, 0.2f, 0.2f, 1.0f },   // 0 좌상 - 빨강
-        {  0.5f,  0.5f,    1.0f, 1.0f, 0.2f, 1.0f },   // 1 우상 - 노랑
-        {  0.5f, -0.5f,    0.2f, 1.0f, 0.2f, 1.0f },   // 2 우하 - 초록
-        { -0.5f, -0.5f,    0.2f, 0.4f, 1.0f, 1.0f },   // 3 좌하 - 파랑
+        //  x     y        r     g     b     a
+        { 0.0f, 0.0f,    1.0f, 0.2f, 0.2f, 1.0f },   // 0 좌상 - 빨강
+        { 1.0f, 0.0f,    1.0f, 1.0f, 0.2f, 1.0f },   // 1 우상 - 노랑
+        { 1.0f, 1.0f,    0.2f, 1.0f, 0.2f, 1.0f },   // 2 우하 - 초록
+        { 0.0f, 1.0f,    0.2f, 0.4f, 1.0f, 1.0f },   // 3 좌하 - 파랑
     };
 
     // 인덱스 버퍼는 정점 버퍼를 대체하는 것이 아니라 "몇 번 정점을 어떤 순서로 읽을지"의
@@ -190,6 +193,16 @@ bool Renderer::CreateSpriteResources()
                   L"CreateBuffer(IndexBuffer)"))
         return false;
 
+    D3D11_BUFFER_DESC constantDesc{};
+    constantDesc.ByteWidth = sizeof(SpriteConstants);
+    constantDesc.Usage = D3D11_USAGE_DYNAMIC;
+    constantDesc.BindFlags = D3D11_BIND_CONSTANT_BUFFER;
+    constantDesc.CPUAccessFlags = D3D11_CPU_ACCESS_WRITE;
+
+    if (!HR_CHECK(m_device->CreateBuffer(&constantDesc, nullptr, m_constantBuffer.GetAddressOf()),
+        L"CreateBuffer(ConstantBuffer)"))
+        return false;
+
     D3D11_RASTERIZER_DESC rd{};
     rd.FillMode = D3D11_FILL_SOLID;
     rd.CullMode = D3D11_CULL_BACK;
@@ -198,7 +211,6 @@ bool Renderer::CreateSpriteResources()
     if (!HR_CHECK(m_device->CreateRasterizerState(&rd, m_rasterizerState.GetAddressOf()),
         L"CreateRasterizerState"))
         return false;
-
 
     return true;
 }
@@ -376,9 +388,36 @@ void Renderer::Render()
     //D3D11_PRIMITIVE_TOPOLOGY_LINESTRIP로 수정하니 선만 생김.
     m_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_context->RSSetState(m_rasterizerState.Get());
+
     // VS / PS — 어떤 셰이더를 쓸지
     m_context->VSSetShader(m_vertexShader.Get(), nullptr, 0);
     m_context->PSSetShader(m_pixelShader.Get(), nullptr, 0);
+
+    // ── 상수 버퍼 갱신 ──
+    //
+    // 이 구조체는 이번 프레임에 보낼 32바이트를 조립하는 작업대다. memcpy가 끝나면
+    // 죽어도 되므로 지역 변수로 둔다. 위치를 움직이게 되면 그때 멤버가 되는 것은
+    // 이 구조체 전체가 아니라 위치 값 하나다.
+    SpriteConstants constants{};
+    constants.screenWidth  = static_cast<float>(m_width);
+    constants.screenHeight = static_cast<float>(m_height);
+    constants.posX  = 100.0f;   constants.posY  =  50.0f;
+    constants.sizeX = 200.0f;   constants.sizeY = 200.0f;
+
+    // WRITE_DISCARD는 기존 내용을 버리고 새 메모리를 준다. 덕분에 CPU가 GPU를 안 기다리지만,
+    // 받은 메모리에는 쓰레기가 들어 있으므로 매번 구조체 전체를 써야 한다.
+    //
+    // Map이 실패하면 mapped.pData가 nullptr이라 그대로 쓰면 죽는다. 매 프레임 도는
+    // 코드라 HR_CHECK(메시지 박스)는 못 쓴다 - 실패하면 창이 무한히 뜬다.
+    D3D11_MAPPED_SUBRESOURCE mapped{};
+    if (SUCCEEDED(m_context->Map(m_constantBuffer.Get(), 0, D3D11_MAP_WRITE_DISCARD, 0, &mapped)))
+    {
+        memcpy(mapped.pData, &constants, sizeof(constants));
+        m_context->Unmap(m_constantBuffer.Get(), 0);
+    }
+
+    // 슬롯 여러 개에 꽂을 수 있어 배열을 받는다. register(b0)의 0과 이 0이 짝이다.
+    m_context->VSSetConstantBuffers(0, 1, m_constantBuffer.GetAddressOf());
 
     // 그려. 인덱스 6개를 0번부터. 세 개씩 끊겨 삼각형 2개가 된다.
     //   Draw(2, 0)     -> 3개씩 끊는데 2개뿐이라 아무것도 안 나왔다
