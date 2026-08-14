@@ -1,6 +1,6 @@
 #include "Renderer.h"
 
-#include <cmath>
+#include <cstdint>
 #include <d3dcompiler.h>
 #include <dxgi1_2.h>
 
@@ -136,15 +136,31 @@ bool Renderer::CreateTriangleResources()
     // ── 4. 정점 버퍼 ──
     //
     // 좌표는 NDC다. 화면 중앙이 (0,0), 위가 +y, 범위는 -1 ~ +1.
-    // 창 크기가 바뀌어도 이 값은 그대로라서 삼각형이 같이 늘어난다.
+    // 창 크기가 바뀌어도 이 값은 그대로라서 사각형이 같이 늘어난다.
+    //
+    // 사각형은 삼각형 2개지만 정점은 4개면 된다. 0과 2가 두 삼각형에 함께 쓰인다.
+    //
+    //   0 ────── 1
+    //   │ ╲      │        위쪽 삼각형: 0, 1, 2
+    //   │   ╲    │        아래쪽 삼각형: 0, 2, 3
+    //   3 ────── 2
+    const Vertex vertices[] = {
+        //   x      y        r     g     b     a
+        { -0.5f,  0.5f,    1.0f, 0.2f, 0.2f, 1.0f },   // 0 좌상 - 빨강
+        {  0.5f,  0.5f,    1.0f, 1.0f, 0.2f, 1.0f },   // 1 우상 - 노랑
+        {  0.5f, -0.5f,    0.2f, 1.0f, 0.2f, 1.0f },   // 2 우하 - 초록
+        { -0.5f, -0.5f,    0.2f, 0.4f, 1.0f, 1.0f },   // 3 좌하 - 파랑
+    };
+
+    // 인덱스 버퍼는 정점 버퍼를 대체하는 것이 아니라 "몇 번 정점을 어떤 순서로 읽을지"의
+    // 목록이다. 둘 다 있어야 한다.
     //
     // 순서가 시계 방향인 것에 이유가 있다. D3D는 기본적으로 시계 방향을 앞면으로 보고,
     // 뒷면은 그리지 않고 버린다(백페이스 컬링). 반시계로 적으면 삼각형이 사라진다.
-    const Vertex vertices[] = {
-        //   x      y        r     g     b     a
-        {  0.0f,  0.5f,    1.0f, 0.2f, 0.2f, 1.0f },   // 위      - 빨강
-        {  0.5f, -0.5f,    0.2f, 1.0f, 0.2f, 1.0f },   // 오른아래 - 초록
-        { -0.5f, -0.5f,    0.2f, 0.4f, 1.0f, 1.0f },   // 왼아래   - 파랑
+    // 정확히는 순환 방향이 기준이라 { 0,2,3 }과 { 2,3,0 }은 같은 결과다.
+    const uint16_t indices[] = {
+        0, 1, 2,    // 위쪽 삼각형
+        0, 2, 3,    // 아래쪽 삼각형
     };
 
     D3D11_BUFFER_DESC desc{};
@@ -159,6 +175,19 @@ bool Renderer::CreateTriangleResources()
 
     if (!HR_CHECK(m_device->CreateBuffer(&desc, &initialData, m_vertexBuffer.GetAddressOf()),
                   L"CreateBuffer(VertexBuffer)"))
+        return false;
+
+    // 인덱스 버퍼도 만드는 절차가 정점 버퍼와 똑같다. BindFlags만 다르다.
+    D3D11_BUFFER_DESC indexDesc{};
+    indexDesc.ByteWidth = sizeof(indices);
+    indexDesc.Usage     = D3D11_USAGE_IMMUTABLE;
+    indexDesc.BindFlags = D3D11_BIND_INDEX_BUFFER;
+
+    D3D11_SUBRESOURCE_DATA indexData{};
+    indexData.pSysMem = indices;
+
+    if (!HR_CHECK(m_device->CreateBuffer(&indexDesc, &indexData, m_indexBuffer.GetAddressOf()),
+                  L"CreateBuffer(IndexBuffer)"))
         return false;
 
     D3D11_RASTERIZER_DESC rd{};
@@ -326,16 +355,13 @@ void Renderer::Render()
     // 그래서 매 프레임 다시 바인딩한다.
     ID3D11RenderTargetView* views[] = { m_backBufferView.Get() };
     m_context->OMSetRenderTargets(1, views, nullptr);
-    static float t = 0.0f;
-    t += 0.01f;
-    const float color[4] = { sinf(t) * 0.5f + 0.5f, 0.2f, 0.4f, 1.0f };
-    m_context->ClearRenderTargetView(m_backBufferView.Get(), color);
+    m_context->ClearRenderTargetView(m_backBufferView.Get(), kClearColor);
 
-    // ── 삼각형 그리기 ──
+    // ── 사각형 그리기 ──
     //
-    // Draw()에는 "무엇을 어디에 어떻게"가 하나도 안 들어간다. 개수만 넘긴다.
+    // DrawIndexed()에는 "무엇을 어디에 어떻게"가 하나도 안 들어간다. 개수만 넘긴다.
     // 그래서 그 전에 파이프라인 각 자리에 필요한 것을 꽂아둬야 한다.
-    // 아래 다섯 줄이 그 꽂아두는 작업이고, 마지막 한 줄이 "그려"다.
+    // 아래 여섯 줄이 그 꽂아두는 작업이고, 마지막 한 줄이 "그려"다.
 
     UINT stride = sizeof(Vertex);   // 정점 하나가 몇 바이트인지
     UINT offset = 0;                // 버퍼 앞에서 몇 바이트 건너뛰고 시작할지
@@ -343,6 +369,10 @@ void Renderer::Render()
     // IA — 바이트를 어떻게 해석할지, 어느 버퍼에서 읽을지, 셋씩 묶어 삼각형으로 볼지
     m_context->IASetInputLayout(m_inputLayout.Get());
     m_context->IASetVertexBuffers(0, 1, m_vertexBuffer.GetAddressOf(), &stride, &offset);
+    // 정점 버퍼는 슬롯 여러 개에 꽂을 수 있어 배열로 넘기고(GetAddressOf),
+    // 인덱스 버퍼는 파이프라인에 하나뿐이라 그냥 넘긴다(Get).
+    // 두 번째 인자는 인덱스 하나의 크기다. indices가 uint16_t라 R16_UINT.
+    m_context->IASetIndexBuffer(m_indexBuffer.Get(), DXGI_FORMAT_R16_UINT, 0);
     //D3D11_PRIMITIVE_TOPOLOGY_LINESTRIP로 수정하니 선만 생김.
     m_context->IASetPrimitiveTopology(D3D11_PRIMITIVE_TOPOLOGY_TRIANGLELIST);
     m_context->RSSetState(m_rasterizerState.Get());
@@ -350,9 +380,11 @@ void Renderer::Render()
     m_context->VSSetShader(m_vertexShader.Get(), nullptr, 0);
     m_context->PSSetShader(m_pixelShader.Get(), nullptr, 0);
 
-    // 그려. 정점 3개를 0번부터.
-    //2,0으로 수정하니 삼각형이 사라짐.
-    m_context->Draw(3, 0);
+    // 그려. 인덱스 6개를 0번부터. 세 개씩 끊겨 삼각형 2개가 된다.
+    //   Draw(2, 0)     -> 3개씩 끊는데 2개뿐이라 아무것도 안 나왔다
+    //   DrawIndexed(3, 0, 0) -> 위쪽 삼각형만
+    //   DrawIndexed(3, 3, 0) -> 인덱스 3번부터 읽어 아래쪽 삼각형만
+    m_context->DrawIndexed(6, 0, 0);
 
     // 첫 번째 인자가 SyncInterval이다. 1이면 수직동기(VSync)를 기다린다.
     // 지금은 화면 찢김 없이 보는 것이 목적이라 1로 둔다.

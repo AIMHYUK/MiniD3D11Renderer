@@ -8,7 +8,7 @@
 // 정점 하나가 담는 것. C++ 쪽 정의다.
 //
 // 이 구조체와 HLSL의 VSInput, 그리고 입력 레이아웃 셋이 서로 맞아야 한다.
-// 하나라도 어긋나면 삼각형이 엉뚱한 데 뜨거나 아예 안 뜬다.
+// 하나라도 어긋나면 그림이 엉뚱한 데 뜨거나 아예 안 뜬다.
 struct Vertex
 {
     float x, y;          // NDC 좌표. 화면 중앙이 (0,0), 범위는 -1 ~ +1
@@ -45,7 +45,8 @@ private:
     ComPtr<ID3D11PixelShader>  m_pixelShader;
     ComPtr<ID3D11InputLayout>  m_inputLayout;   // 정점 버퍼의 바이트를 해석하는 규칙
     ComPtr<ID3D11Buffer>       m_vertexBuffer;  // GPU 메모리에 올라간 정점 데이터
-    ComPtr<ID3D11RasterizerState>   m_rasterizerState; //이거로 반시계만 보는지 , 뒤에도 보는지 규칙해방가능.
+    ComPtr<ID3D11Buffer>       m_indexBuffer;   // 그 정점을 몇 번째로 읽을지의 목록
+    ComPtr<ID3D11RasterizerState> m_rasterizerState; // 컬링 규칙(앞뒤 판정, 양면 그리기)을 여기서 정한다
 
     UINT m_width  = 0;
     UINT m_height = 0;
