@@ -31,16 +31,16 @@ private:
     bool CreateBackBufferView();
     void ReleaseBackBufferView();
 
-    // 삼각형을 그리는 데 필요한 것들을 한 번에 만든다.
-    // 셰이더 컴파일 -> 셰이더 객체 -> 입력 레이아웃 -> 정점 버퍼 순.
-    bool CreateTriangleResources();
+    // 스프라이트를 그리는 데 필요한 것들을 한 번에 만든다.
+    // 셰이더 컴파일 -> 셰이더 객체 -> 입력 레이아웃 -> 정점/인덱스 버퍼 -> 래스터라이저 상태 순.
+    bool CreateSpriteResources();
 
     ComPtr<ID3D11Device>           m_device;
     ComPtr<ID3D11DeviceContext>    m_context;
     ComPtr<IDXGISwapChain1>        m_swapChain;
     ComPtr<ID3D11RenderTargetView> m_backBufferView;
 
-    // ── 삼각형용 ──
+    // ── 스프라이트용 ──
     ComPtr<ID3D11VertexShader> m_vertexShader;
     ComPtr<ID3D11PixelShader>  m_pixelShader;
     ComPtr<ID3D11InputLayout>  m_inputLayout;   // 정점 버퍼의 바이트를 해석하는 규칙

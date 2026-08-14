@@ -77,18 +77,18 @@ bool Renderer::Initialize(HWND hwnd, UINT width, UINT height)
     if (!CreateBackBufferView())
         return false;
 
-    return CreateTriangleResources();
+    return CreateSpriteResources();
 }
 
-bool Renderer::CreateTriangleResources()
+bool Renderer::CreateSpriteResources()
 {
     // ── 1. 셰이더 소스를 GPU 바이트코드로 컴파일한다 ──
     ComPtr<ID3DBlob> vsBlob;
     ComPtr<ID3DBlob> psBlob;
 
-    if (!CompileShaderFromFile(L"shaders\\Triangle.vs.hlsl", "main", "vs_5_0", vsBlob))
+    if (!CompileShaderFromFile(L"shaders\\Sprite.vs.hlsl", "main", "vs_5_0", vsBlob))
         return false;
-    if (!CompileShaderFromFile(L"shaders\\Triangle.ps.hlsl", "main", "ps_5_0", psBlob))
+    if (!CompileShaderFromFile(L"shaders\\Sprite.ps.hlsl", "main", "ps_5_0", psBlob))
         return false;
 
     // ── 2. 바이트코드로 실제 셰이더 객체를 만든다 ──
